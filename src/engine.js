@@ -1,4 +1,11 @@
 const LIMBS = ['head', 'chest', 'stomach', 'leftArm', 'rightArm', 'leftLeg', 'rightLeg'];
+const ITEMS = {
+  food: { name: 'Dried cactus', icon: '🥫', category: 'rations', value: 12, weight: 0.4 },
+  ore: { name: 'Copper ore', icon: '⛏️', category: 'trade goods', value: 18, weight: 2.4 },
+  medkits: { name: 'Field medkit', icon: '✚', category: 'medical', value: 38, weight: 0.8 },
+  scrap: { name: 'Ancient scrap', icon: '⚙', category: 'crafting', value: 32, weight: 1.2 },
+  water: { name: 'Water skin', icon: '💧', category: 'rations', value: 8, weight: 1.0 },
+};
 const JOBS = {
   idle: { label: 'Idle', icon: '·' },
   mine: { label: 'Mine copper', icon: '⛏', skill: 'labor' },
@@ -16,8 +23,9 @@ export function createGame(options = {}) {
     paused: false,
     speed: 1,
     cats: 120,
-    inventory: { food: 3, ore: 0, medkits: 1, scrap: 0 },
+    inventory: { food: 3, ore: 0, medkits: 1, scrap: 0, water: 2 },
     location: { name: 'Vulture Flats', biome: 'salt desert', threat: 0.38, x: 48, y: 56 },
+    orders: { destination: null, selectedWorldId: null },
     selectedId: 'dera',
     squad: [
       createMember('dera', 'Dera', 'wanderer', { melee: 2, labor: 1, athletics: 2, toughness: 1 }, 72, rng),
@@ -52,6 +60,29 @@ function createMember(id, name, origin, skills, hunger, rng) {
 }
 
 export function createWorld() {
+  const towns = [
+    { id: 'town-kudu', name: 'Waystation Kudu', x: 65, y: 39, z: 9, buy: { ore: 18, scrap: 30 }, sell: { food: 12, medkits: 38, water: 8 }, faction: 'Free Caravans', population: 48 },
+    { id: 'town-rustwake', name: 'Rustwake', x: 24, y: 74, z: 13, buy: { ore: 22, scrap: 35 }, sell: { food: 14, medkits: 42, water: 10 }, faction: 'Iron Choir', population: 92 },
+    { id: 'town-blue-salt', name: 'Blue Salt Camp', x: 77, y: 79, z: 7, buy: { ore: 16, scrap: 25 }, sell: { food: 10, medkits: 45, water: 7 }, faction: 'Nomad Glassers', population: 31 },
+  ];
+  const ruins = [
+    { id: 'ruin-lab', name: 'Sunken Lab', x: 31, y: 30, z: 18, loot: 'scrap', danger: 0.68 },
+    { id: 'ruin-skimmer', name: 'Skimmer Nest', x: 83, y: 18, z: 14, loot: 'eggs', danger: 0.82 },
+    { id: 'ruin-drill', name: 'Old Drill Yard', x: 15, y: 51, z: 11, loot: 'ore', danger: 0.44 },
+  ];
+  const resources = [
+    { id: 'res-copper-north', type: 'resource', name: 'Copper vein north', x: 43, y: 42, z: 5, resource: 'ore', richness: 0.8 },
+    { id: 'res-copper-ridge', type: 'resource', name: 'Copper ridge', x: 56, y: 63, z: 8, resource: 'ore', richness: 0.65 },
+    { id: 'res-water', type: 'resource', name: 'Brackish well', x: 70, y: 54, z: 3, resource: 'water', richness: 0.45 },
+  ];
+  const camps = [
+    { id: 'camp-player', type: 'camp', name: 'Dustwake camp', x: 48, y: 56, z: 4, faction: 'Player' },
+    { id: 'camp-jackal', type: 'camp', name: 'Dust Jackal camp', x: 58, y: 24, z: 10, faction: 'Dust Jackals' },
+  ];
+  const threats = [
+    { id: 'threat-bonedogs', type: 'threat', name: 'Bone dog pack', x: 39, y: 68, z: 2, danger: 0.55 },
+    { id: 'threat-raiders', type: 'threat', name: 'Raider patrol', x: 71, y: 30, z: 4, danger: 0.72 },
+  ];
   return {
     factions: [
       { name: 'Dust Jackals', relation: -35, color: '#d9924a' },
@@ -59,16 +90,11 @@ export function createWorld() {
       { name: 'Iron Choir', relation: -5, color: '#d86161' },
       { name: 'Nomad Glassers', relation: 8, color: '#91d98b' },
     ],
-    towns: [
-      { name: 'Waystation Kudu', x: 65, y: 39, buy: { ore: 18 }, sell: { food: 12, medkits: 38 }, faction: 'Free Caravans' },
-      { name: 'Rustwake', x: 24, y: 74, buy: { ore: 22 }, sell: { food: 14, medkits: 42 }, faction: 'Iron Choir' },
-      { name: 'Blue Salt Camp', x: 77, y: 79, buy: { ore: 16 }, sell: { food: 10, medkits: 45 }, faction: 'Nomad Glassers' },
-    ],
-    ruins: [
-      { name: 'Sunken Lab', x: 31, y: 30, loot: 'scrap', danger: 0.68 },
-      { name: 'Skimmer Nest', x: 83, y: 18, loot: 'eggs', danger: 0.82 },
-      { name: 'Old Drill Yard', x: 15, y: 51, loot: 'ore', danger: 0.44 },
-    ],
+    towns,
+    ruins,
+    resources,
+    camps,
+    threats,
   };
 }
 
@@ -117,14 +143,18 @@ function runJob(game, member, dt) {
   if (!job || member.job === 'idle') return;
   gainSkill(member, job.skill, 0.024 * dt);
   if (member.job === 'mine' && member.cooldown <= 0) {
-    game.inventory.ore += 1;
+    const vein = nearestObject(member, game.world.resources.filter((r) => r.resource === 'ore'));
+    const richness = vein ? vein.richness : 0.5;
+    game.inventory.ore += richness > 0.7 && game.rng() > 0.45 ? 2 : 1;
     member.cooldown = 10 - Math.min(5, member.skills.labor * 0.65);
-    game.log.unshift(`${member.name} chips copper ore from the cracked flats.`);
+    game.log.unshift(`${member.name} mines ${vein?.name ?? 'a copper vein'} for ore.`);
   }
   if (member.job === 'haul' && member.cooldown <= 0) {
-    game.inventory.food += game.rng() > 0.55 ? 1 : 0;
+    const foundFood = game.rng() > 0.55;
+    if (foundFood) game.inventory.food += 1;
+    else if (game.rng() > 0.5) game.inventory.water += 1;
     member.cooldown = 13;
-    game.log.unshift(`${member.name} hauls salvage and finds ${game.inventory.food ? 'supplies' : 'nothing useful'}.`);
+    game.log.unshift(`${member.name} hauls salvage and finds ${foundFood ? 'rations' : 'a water skin'}.`);
   }
   if (member.job === 'scout' && member.cooldown <= 0) {
     const found = game.rng() > 0.62;
@@ -181,16 +211,28 @@ function healOrBleed(member, game, dt) {
 }
 
 function wander(member, game, dt) {
+  const ordered = game.orders.destination;
   const speed = (0.05 + member.skills.athletics * 0.015) * dt * (member.hunger < 25 ? 0.45 : 1);
+  if (ordered) {
+    const index = game.squad.findIndex((m) => m.id === member.id);
+    const formation = formationOffset(index);
+    member.targetX = clamp(ordered.x + formation.x, 4, 96);
+    member.targetY = clamp(ordered.y + formation.y, 4, 96);
+  }
   const dx = member.targetX - member.x;
   const dy = member.targetY - member.y;
   const dist = Math.hypot(dx, dy);
   if (dist < 0.8) {
-    member.targetX = clamp(member.x + (game.rng() - 0.5) * 20, 5, 95);
-    member.targetY = clamp(member.y + (game.rng() - 0.5) * 20, 5, 95);
+    if (!ordered) {
+      member.targetX = clamp(member.x + (game.rng() - 0.5) * 20, 5, 95);
+      member.targetY = clamp(member.y + (game.rng() - 0.5) * 20, 5, 95);
+    }
   } else {
     member.x += (dx / dist) * speed;
     member.y += (dy / dist) * speed;
+  }
+  if (ordered && game.squad.every((m, i) => Math.hypot(m.x - clamp(ordered.x + formationOffset(i).x, 4, 96), m.y - clamp(ordered.y + formationOffset(i).y, 4, 96)) < 1.2)) {
+    game.orders.destination = null;
   }
 }
 
@@ -203,10 +245,13 @@ export function tradeAtTown(game, townName, order = {}) {
   const buyFood = Math.min(order.buyFood ?? 0, Math.floor(game.cats / town.sell.food));
   game.inventory.food += buyFood;
   game.cats -= buyFood * town.sell.food;
+  const buyWater = Math.min(order.buyWater ?? 0, Math.floor(game.cats / town.sell.water));
+  game.inventory.water += buyWater;
+  game.cats -= buyWater * town.sell.water;
   const buyMedkits = Math.min(order.buyMedkits ?? 0, Math.floor(game.cats / town.sell.medkits));
   game.inventory.medkits += buyMedkits;
   game.cats -= buyMedkits * town.sell.medkits;
-  game.log.unshift(`Traded at ${town.name}: sold ${sellOre} ore, bought ${buyFood} food and ${buyMedkits} medkits.`);
+  game.log.unshift(`Traded at ${town.name}: sold ${sellOre} ore, bought ${buyFood} food, ${buyWater} water and ${buyMedkits} medkits.`);
   trimLog(game);
   return game;
 }
@@ -234,8 +279,41 @@ export function getSquadPower(game) {
   }, 0) * 10) / 10;
 }
 
+export function getInventorySlots(game) {
+  return Object.entries(ITEMS).map(([id, meta]) => ({
+    id,
+    ...meta,
+    qty: game.inventory[id] ?? 0,
+  }));
+}
+
+export function getWorldObjects(game) {
+  const withType = (type, items) => items.map((item) => ({ type, z: 0, ...item }));
+  return [
+    ...withType('town', game.world.towns),
+    ...withType('ruin', game.world.ruins),
+    ...withType('resource', game.world.resources),
+    ...withType('camp', game.world.camps),
+    ...withType('threat', game.world.threats),
+  ].sort((a, b) => a.y - b.y || a.x - b.x);
+}
+
+export function moveSquadTo(game, x, y) {
+  game.orders.destination = { x: clamp(x, 4, 96), y: clamp(y, 4, 96) };
+  for (const [index, member] of game.squad.entries()) {
+    const offset = formationOffset(index);
+    member.targetX = clamp(game.orders.destination.x + offset.x, 4, 96);
+    member.targetY = clamp(game.orders.destination.y + offset.y, 4, 96);
+    member.state = member.job === 'idle' ? 'moving' : member.state;
+  }
+  game.log.unshift(`Move order: squad heading to ${Math.round(game.orders.destination.x)}, ${Math.round(game.orders.destination.y)}.`);
+  trimLog(game);
+  return game.orders.destination;
+}
+
 export function getVisibleJobs() { return JOBS; }
 export function getLimbs() { return LIMBS; }
+export function getItems() { return ITEMS; }
 
 function getMember(game, id) {
   const member = game.squad.find((m) => m.id === id);
@@ -250,6 +328,25 @@ function gainSkill(member, skill, amount) {
     member.xp[skill] -= 1;
     member.skills[skill] = Math.round((member.skills[skill] + 0.1) * 10) / 10;
   }
+}
+
+function nearestObject(member, objects) {
+  return objects.reduce((best, obj) => {
+    const distance = Math.hypot(member.x - obj.x, member.y - obj.y);
+    return !best || distance < best.distance ? { ...obj, distance } : best;
+  }, null);
+}
+
+function formationOffset(index) {
+  const offsets = [
+    { x: 0, y: 0 },
+    { x: -2.2, y: 1.8 },
+    { x: 2.2, y: 1.8 },
+    { x: -4.1, y: 3.6 },
+    { x: 4.1, y: 3.6 },
+    { x: 0, y: 4.8 },
+  ];
+  return offsets[index % offsets.length];
 }
 
 function prettyLimb(limb) { return limb.replace(/([A-Z])/g, ' $1').toLowerCase(); }
